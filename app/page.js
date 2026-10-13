@@ -31,6 +31,8 @@ export default function Home() {
   const [password, setPassword] = useState("");
   const [session, setSession] = useState(null);
   const [loggingIn, setLoggingIn] = useState(false);
+  const [signingUp, setSigningUp] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   // saved habits
   const [savedHabits, setSavedHabits] = useState([]);
@@ -138,6 +140,52 @@ export default function Home() {
 
     setSession(data.session);
     setPassword("");
+  }
+
+  async function handleSignUp() {
+    setSigningUp(true);
+    setError("");
+
+    // same shape as signInWithPassword: { data, error }
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+    });
+
+    setSigningUp(false);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    // If "Confirm email" is ON in Supabase, there's no session yet —
+    // the user has to click the link in their inbox first.
+    if (data.session) {
+      setSession(data.session);
+      setPassword("");
+      showToast("Account created");
+    } else {
+      showToast("Check your email to confirm your account");
+    }
+  }
+
+  async function handleLogout() {
+    setLoggingOut(true);
+    setError("");
+
+    // signOut only returns { error } — there's no data to give back
+    const { error } = await supabase.auth.signOut();
+
+    setLoggingOut(false);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    setSession(null); // → login card reappears, useEffect refetches saved habits
+    showToast("Logged out");
   }
 
   async function handleSubmit(e) {
@@ -305,6 +353,37 @@ export default function Home() {
               )}
             </div>
           </div>
+
+          {/* log out — only when logged in */}
+          {session && (
+            <button
+              onClick={handleLogout}
+              disabled={loggingOut}
+              className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3.5 py-1 text-xs font-medium text-slate-400 backdrop-blur-md transition hover:border-red-400/40 hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loggingOut ? (
+                <>
+                  <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-400/40 border-t-slate-300" />
+                  Logging out…
+                </>
+              ) : (
+                <>
+                  <svg
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    className="h-3.5 w-3.5"
+                  >
+                    <path
+                      fillRule="evenodd"
+                      d="M3 4.25A2.25 2.25 0 0 1 5.25 2h5.5A2.25 2.25 0 0 1 13 4.25v2a.75.75 0 0 1-1.5 0v-2a.75.75 0 0 0-.75-.75h-5.5a.75.75 0 0 0-.75.75v11.5c0 .41.34.75.75.75h5.5a.75.75 0 0 0 .75-.75v-2a.75.75 0 0 1 1.5 0v2A2.25 2.25 0 0 1 10.75 18h-5.5A2.25 2.25 0 0 1 3 15.75V4.25Zm10.47 2.22a.75.75 0 0 1 1.06 0l3 3a.75.75 0 0 1 0 1.06l-3 3a.75.75 0 1 1-1.06-1.06l1.72-1.72H8a.75.75 0 0 1 0-1.5h7.19l-1.72-1.72a.75.75 0 0 1 0-1.06Z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                  Log out
+                </>
+              )}
+            </button>
+          )}
         </header>
 
         {/* shared error message (login + habits) */}
@@ -328,7 +407,7 @@ export default function Home() {
                 placeholder="you@example.com"
                 autoComplete="email"
                 required
-                disabled={loggingIn}
+                disabled={loggingIn || signingUp}
                 className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3 text-slate-100 placeholder-slate-500 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/40 disabled:opacity-60"
               />
               <input
@@ -338,23 +417,40 @@ export default function Home() {
                 placeholder="Password"
                 autoComplete="current-password"
                 required
-                disabled={loggingIn}
+                disabled={loggingIn || signingUp}
                 className="rounded-xl border border-white/10 bg-slate-900/60 px-4 py-3 text-slate-100 placeholder-slate-500 outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/40 disabled:opacity-60"
               />
-              <button
-                type="submit"
-                disabled={loggingIn || !email || !password}
-                className="mt-1 flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-5 py-3 font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {loggingIn ? (
-                  <>
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-                    Logging in…
-                  </>
-                ) : (
-                  "Log in"
-                )}
-              </button>
+              <div className="mt-1 grid grid-cols-2 gap-3">
+                <button
+                  type="submit"
+                  disabled={loggingIn || signingUp || !email || !password}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-indigo-500 to-fuchsia-500 px-5 py-3 font-semibold text-white shadow-lg shadow-indigo-500/25 transition hover:brightness-110 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {loggingIn ? (
+                    <>
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                      Logging in…
+                    </>
+                  ) : (
+                    "Log in"
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSignUp}
+                  disabled={loggingIn || signingUp || !email || !password}
+                  className="flex items-center justify-center gap-2 rounded-xl border border-indigo-400/40 bg-white/5 px-5 py-3 font-semibold text-indigo-200 transition hover:border-indigo-400/70 hover:bg-indigo-500/10 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {signingUp ? (
+                    <>
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-300/40 border-t-indigo-200" />
+                      Signing up…
+                    </>
+                  ) : (
+                    "Sign up"
+                  )}
+                </button>
+              </div>
             </form>
           </section>
         )}
