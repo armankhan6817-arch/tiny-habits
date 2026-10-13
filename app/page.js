@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/lib/supabase.js";
 
 // Deterministic "random" values so server and client render the same bubbles
@@ -32,9 +32,21 @@ export default function Home() {
   const [session, setSession] = useState(null);
   const [loggingIn, setLoggingIn] = useState(false);
 
+  // saved habits
+  const [savedHabits, setSavedHabits] = useState([]);
+  const [loadingSaved, setLoadingSaved] = useState(false);
+  const [busyKey, setBusyKey] = useState(null); // habit text (saving) or row id (deleting)
+  const [toast, setToast] = useState(null); // { id, message, type }
+  const toastTimer = useRef(null);
+
   useEffect(() => {
     restoreSession();
   }, []);
+
+  // load saved habits on first render and whenever the login state changes
+  useEffect(() => {
+    fetchSavedHabits();
+  }, [session]);
 
   async function restoreSession() {
     const { data, error } = await supabase.auth.getSession();
@@ -45,18 +57,65 @@ export default function Home() {
     }
   }
 
-  async function handleSave(habit) {
-    supabase
+  async function fetchSavedHabits() {
+    setLoadingSaved(true);
+    const { data, error } = await supabase
       .from("habits")
-      .insert({ habit: habit, goal: forGoal })
-      .then(({ data, error }) => {
-        if (error) {
-          console.error("Error saving habit:", error);
-          setError("Failed to save habit. Please try again.");
-        } else {
-          console.log("Habit saved:", data);
-        }
-      });
+      .select("*")
+      .order("created_at", { ascending: false });
+    setLoadingSaved(false);
+
+    if (error) {
+      console.error("Error loading saved habits:", error);
+      setError("Couldn't load saved habits.");
+      return;
+    }
+    setSavedHabits(data ?? []);
+  }
+
+  function showToast(message, type = "success") {
+    setToast({ id: Date.now(), message, type });
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2200);
+  }
+
+  async function handleSave(habit) {
+    setBusyKey(habit);
+    setError("");
+
+    const { error } = await supabase
+      .from("habits")
+      .insert({ habit: habit, goal: forGoal });
+
+    setBusyKey(null);
+
+    if (error) {
+      console.error("Error saving habit:", error);
+      setError("Failed to save habit. Please try again.");
+      return;
+    }
+
+    showToast("Habit saved");
+    fetchSavedHabits(); // refresh the panel → the Save button flips to Delete
+  }
+
+  async function handleDelete(id) {
+    setBusyKey(id);
+    setError("");
+
+    const { error } = await supabase.from("habits").delete().eq("id", id);
+
+    setBusyKey(null);
+
+    if (error) {
+      console.error("Error deleting habit:", error);
+      setError("Failed to delete habit. Please try again.");
+      return;
+    }
+
+    setSavedHabits((prev) => prev.filter((h) => h.id !== id)); // instant UI update
+    showToast("Habit deleted", "delete");
+    fetchSavedHabits(); // confirm against the database
   }
 
   async function handleLogin(e) {
@@ -184,8 +243,23 @@ export default function Home() {
           100% { transform: translateX(14px)  scale(1.04, 0.97); }
         }
 
+        /* toast pops up from the bottom */
+        @keyframes toast-in {
+          0%   { opacity: 0; transform: translateY(14px) scale(0.95); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .toast-in { animation: toast-in 0.25s ease-out; }
+
+        /* newly saved habit slides into the panel */
+        @keyframes saved-in {
+          0%   { opacity: 0; transform: translateY(-8px); }
+          100% { opacity: 1; transform: translateY(0); }
+        }
+        .saved-in { animation: saved-in 0.35s ease-out; }
+
         @media (prefers-reduced-motion: reduce) {
           .bubble-rise, .bubble-warp { animation: none; opacity: 0; }
+          .toast-in, .saved-in { animation: none; }
         }
       `}</style>
 
@@ -343,30 +417,149 @@ export default function Home() {
               </div>
             ) : (
               <ul className="space-y-2">
-                {habits.map((habit, i) => (
-                  <li
-                    key={i}
-                    className="group flex items-center gap-3 rounded-xl border border-white/5 bg-slate-900/50 px-4 py-3 transition hover:border-indigo-400/30 hover:bg-slate-900/80"
-                  >
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-xs font-bold text-white">
-                      {i + 1}
-                    </span>
-                    <span className="text-slate-200">
-                      {habit}
-                      <button
-                        className="ml-2 rounded-md bg-indigo-500 px-3 py-1 text-sm font-medium text-white hover:bg-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
-                        onClick={() => handleSave(habit)}
-                      >
-                        Save
-                      </button>
-                    </span>
-                  </li>
-                ))}
+                {habits.map((habit, i) => {
+                  // is this habit already in the saved table?
+                  const saved = savedHabits.find(
+                    (s) => s.habit === habit && s.goal === forGoal,
+                  );
+                  const busy =
+                    busyKey === habit || (saved && busyKey === saved.id);
+
+                  return (
+                    <li
+                      key={i}
+                      className="group flex items-center gap-3 rounded-xl border border-white/5 bg-slate-900/50 px-4 py-3 transition hover:border-indigo-400/30 hover:bg-slate-900/80"
+                    >
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-500 text-xs font-bold text-white">
+                        {i + 1}
+                      </span>
+                      <span className="text-slate-200">
+                        {habit}
+                        {saved ? (
+                          <button
+                            className="ml-2 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-1 text-sm font-medium text-red-300 transition hover:bg-red-500/20 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50"
+                            onClick={() => handleDelete(saved.id)}
+                            disabled={busy}
+                          >
+                            {busy ? "Deleting…" : "Delete"}
+                          </button>
+                        ) : (
+                          <button
+                            className="ml-2 rounded-md bg-indigo-500 px-3 py-1 text-sm font-medium text-white hover:bg-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 disabled:opacity-50"
+                            onClick={() => handleSave(habit)}
+                            disabled={busy}
+                          >
+                            {busy ? "Saving…" : "Save"}
+                          </button>
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
         </section>
+
+        {/* saved habits panel */}
+        <section className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6 shadow-2xl shadow-indigo-950/50 backdrop-blur-xl">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400">
+              Saved habits
+            </h2>
+            <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-300">
+              {savedHabits.length}
+            </span>
+          </div>
+
+          {loadingSaved && savedHabits.length === 0 ? (
+            <ul className="space-y-2">
+              {[0, 1].map((i) => (
+                <li
+                  key={i}
+                  className="h-14 animate-pulse rounded-xl border border-white/5 bg-slate-900/50"
+                />
+              ))}
+            </ul>
+          ) : savedHabits.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-white/10 py-8 text-center text-slate-500">
+              Nothing saved yet — hit Save on a habit you like.
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {savedHabits.map((item) => (
+                <li
+                  key={item.id}
+                  className="saved-in flex items-start gap-3 rounded-xl border border-emerald-400/10 bg-slate-900/50 px-4 py-3 transition hover:border-emerald-400/30 hover:bg-slate-900/80"
+                >
+                  <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-300">
+                    <svg
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                      className="h-3.5 w-3.5"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M16.7 5.3a1 1 0 0 1 0 1.4l-7.5 7.5a1 1 0 0 1-1.4 0L3.3 9.7a1 1 0 1 1 1.4-1.4l3.8 3.8 6.8-6.8a1 1 0 0 1 1.4 0Z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-slate-200">{item.habit}</p>
+                    {item.goal && (
+                      <p className="mt-0.5 truncate text-xs text-slate-500">
+                        for “{item.goal}”
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => handleDelete(item.id)}
+                    disabled={busyKey === item.id}
+                    className="shrink-0 rounded-md border border-red-400/30 bg-red-500/10 px-3 py-1 text-sm font-medium text-red-300 transition hover:bg-red-500/20 focus:outline-none focus:ring-2 focus:ring-red-500 disabled:opacity-50"
+                  >
+                    {busyKey === item.id ? "Deleting…" : "Delete"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       </div>
+
+      {/* toast — confirms save / delete */}
+      {toast && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-6 z-50 flex justify-center px-4">
+          <div
+            key={toast.id}
+            role="status"
+            className={`toast-in flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium shadow-lg backdrop-blur-md ${
+              toast.type === "delete"
+                ? "border-red-400/30 bg-red-500/15 text-red-200 shadow-red-950/40"
+                : "border-emerald-400/30 bg-emerald-500/15 text-emerald-200 shadow-emerald-950/40"
+            }`}
+          >
+            {toast.type === "delete" ? (
+              <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+                <path
+                  fillRule="evenodd"
+                  d="M8.5 2a1 1 0 0 0-.9.6L7.2 3.5H4a1 1 0 0 0 0 2h.3l.8 10.1A2 2 0 0 0 7.1 17.5h5.8a2 2 0 0 0 2-1.9l.8-10.1h.3a1 1 0 1 0 0-2h-3.2l-.4-.9a1 1 0 0 0-.9-.6h-3Z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4">
+                <path
+                  fillRule="evenodd"
+                  d="M16.7 5.3a1 1 0 0 1 0 1.4l-7.5 7.5a1 1 0 0 1-1.4 0L3.3 9.7a1 1 0 1 1 1.4-1.4l3.8 3.8 6.8-6.8a1 1 0 0 1 1.4 0Z"
+                  clipRule="evenodd"
+                />
+              </svg>
+            )}
+            {toast.message}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
